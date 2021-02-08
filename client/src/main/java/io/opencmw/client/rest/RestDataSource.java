@@ -3,6 +3,8 @@ package io.opencmw.client.rest;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.net.MalformedURLException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
@@ -45,17 +47,17 @@ import okhttp3.sse.EventSources;
 public class RestDataSource extends DataSource implements Runnable {
     public static final Factory FACTORY = new Factory() {
         @Override
-        public boolean matches(final String endpoint) {
-            return endpoint != null && !endpoint.isBlank() && endpoint.toLowerCase().startsWith("http");
+        public boolean matches(final URI endpoint) {
+            return endpoint != null && endpoint.getScheme().toLowerCase().startsWith("http");
         }
 
         @Override
-        public Class<? extends IoSerialiser> getMatchingSerialiserType(final String endpoint) {
+        public Class<? extends IoSerialiser> getMatchingSerialiserType(final URI endpoint) {
             return JsonSerialiser.class;
         }
 
         @Override
-        public DataSource newInstance(final ZContext context, final String endpoint, final Duration timeout, final String clientId) {
+        public DataSource newInstance(final ZContext context, final URI endpoint, final Duration timeout, final String clientId) {
             return new RestDataSource(context, endpoint, timeout, clientId);
         }
     };
@@ -69,7 +71,7 @@ public class RestDataSource extends DataSource implements Runnable {
     protected final AtomicBoolean run = new AtomicBoolean(true);
     protected final String uniqueID;
     protected final byte[] uniqueIdBytes;
-    protected final String endpoint;
+    protected final URI endpoint;
     protected final Duration timeOut;
     protected final String clientID;
     protected int cancelLastCall; // needed for unit-testing only
@@ -91,7 +93,7 @@ public class RestDataSource extends DataSource implements Runnable {
         }
     };
 
-    protected RestDataSource(final ZContext ctx, final String endpoint) {
+    protected RestDataSource(final ZContext ctx, final URI endpoint) {
         this(ctx, endpoint, Duration.ofMillis(0), RestDataSource.class.getName());
     }
 
@@ -102,7 +104,7 @@ public class RestDataSource extends DataSource implements Runnable {
      * @param timeOut after which the request defaults to a time-out exception (no data)
      * @param clientID subscription id to be able to process the notification updates.
      */
-    public RestDataSource(final ZContext ctx, final String endpoint, final Duration timeOut, final String clientID) {
+    public RestDataSource(final ZContext ctx, final URI endpoint, final Duration timeOut, final String clientID) {
         super(endpoint);
         synchronized (LOGGER) { // prevent race condition between multiple constructor invocations
             if (okClient == null) {
@@ -162,31 +164,14 @@ public class RestDataSource extends DataSource implements Runnable {
 
         LOGGER.atTrace().addArgument(endpoint).log("(re-)connecting to REST endpoint: '{}'");
     }
-    /**
-     * Perform a get request on this endpoint.
-     * @param requestId request id which later allows to match the returned value to this query.
-     *                  This is the only mandatory parameter, all the following may be null.
-     * @param filterPattern extend the filters originally supplied to the endpoint e.g. "ctx=selector&amp;channel=chanA"
-     * @param filters The serialised filters which will determine which data to update
-     * @param data The serialised data which can be used by the get call
-     * @param rbacToken byte array containing signed body hash-key and corresponding RBAC role
-     */
+
     @Override
-    public void get(final String requestId, final String filterPattern, final byte[] filters, final byte[] data, final byte[] rbacToken) {
+    public void get(final String requestId, final URI endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
         enqueueRequest(requestId); //TODO: refactor interface
     }
 
-    /**
-     * Perform a set request on this endpoint using additional filters
-     * @param requestId request id which later allows to match the returned value to this query.
-     *                  This is the only mandatory parameter, all the following may be null.
-     * @param filterPattern extend the filters originally supplied to the endpoint e.g. "ctx=selector&amp;channel=chanA"
-     * @param filters The serialised filters which will determine which data to update
-     * @param data The serialised data which can be used by the get call
-     * @param rbacToken byte array containing signed body hash-key and corresponding RBAC role
-     */
     @Override
-    public void set(final String requestId, final String filterPattern, final byte[] filters, final byte[] data, final byte[] rbacToken) {
+    public void set(final String requestId, final URI endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
         throw new UnsupportedOperationException("set not (yet) implemented");
     }
 
@@ -200,15 +185,19 @@ public class RestDataSource extends DataSource implements Runnable {
     }
 
     @Override
-    public void subscribe(final String reqId, final String endpoint, final byte[] rbacToken) {
-        final Request request = new Request.Builder().url(endpoint).build();
-        sseSource.put(reqId, eventSourceFactory.newEventSource(request, new EventSourceListener() {
-            @Override
-            public void onEvent(final @NotNull EventSource eventSource, final String id, final String type, final @NotNull String data) {
-                final String pubKey = clientID + "#" + PUBLICATION_COUNTER.getAndIncrement();
-                getRequest(pubKey, endpoint, MimeType.TEXT); // poll actual endpoint
-            }
-        }));
+    public void subscribe(final String reqId, final URI endpoint, final byte[] rbacToken) {
+        try {
+            final Request request = new Request.Builder().url(endpoint.toURL()).build();
+            sseSource.put(reqId, eventSourceFactory.newEventSource(request, new EventSourceListener() {
+                @Override
+                public void onEvent(final @NotNull EventSource eventSource, final String id, final String type, final @NotNull String data) {
+                    final String pubKey = clientID + "#" + PUBLICATION_COUNTER.getAndIncrement();
+                    getRequest(pubKey, endpoint.toString(), MimeType.TEXT); // poll actual endpoint
+                }
+            }));
+        } catch (MalformedURLException e) {
+            e.printStackTrace();
+        }
     }
 
     @Override
@@ -258,7 +247,7 @@ public class RestDataSource extends DataSource implements Runnable {
                     if (LOGGER.isTraceEnabled()) {
                         LOGGER.atTrace().addArgument(hash).log("external request with hashKey = '{}'");
                     }
-                    getRequest(hash, endpoint, MimeType.TEXT);
+                    getRequest(hash, endpoint.toString(), MimeType.TEXT);
                 }
             } catch (InterruptedException e) { // NOSONAR NOPMD
                 LOGGER.atError().setCause(e).addArgument(endpoint).log("error in retrieving requestQueue items for endpoint: {}");

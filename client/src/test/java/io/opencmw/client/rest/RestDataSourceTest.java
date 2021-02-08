@@ -3,6 +3,8 @@ package io.opencmw.client.rest;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
@@ -74,9 +76,8 @@ class RestDataSourceTest {
     @Test
     void basicRestDataSourceTests() {
         assertThrows(UnsupportedOperationException.class, () -> new RestDataSource(null, null));
-        assertThrows(UnsupportedOperationException.class, () -> new RestDataSource(null, ""));
-        assertThrows(IllegalArgumentException.class, () -> new RestDataSource(null, server.url("/sse").toString(), null, "clientName")); // NOSONAR
-        RestDataSource dataSource = new RestDataSource(null, server.url("/sse").toString());
+        assertThrows(IllegalArgumentException.class, () -> new RestDataSource(null, server.url("/sse").uri(), null, "clientName")); // NOSONAR
+        RestDataSource dataSource = new RestDataSource(null, server.url("/sse").uri());
         assertNotNull(dataSource);
         assertDoesNotThrow(() -> dataSource.housekeeping());
     }
@@ -84,10 +85,10 @@ class RestDataSourceTest {
     @Test
     void testRestDataSource() {
         try (final ZContext ctx = new ZContext()) {
-            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/sse").toString());
+            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/sse").uri());
             assertNotNull(dataSource);
 
-            dataSource.subscribe("1", server.url("/sse").toString(), new byte[0]);
+            dataSource.subscribe("1", server.url("/sse").uri(), new byte[0]);
             receiveAndCheckData(dataSource, "io.opencmw.client.rest.RestDataSource#*", true);
 
             // test asynchronuous get
@@ -103,7 +104,7 @@ class RestDataSourceTest {
     @Test
     void testRestDataSourceTimeOut() {
         try (final ZContext ctx = new ZContext()) {
-            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/testDelayed").toString(), Duration.ofMillis(10), "testClient");
+            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/testDelayed").uri(), Duration.ofMillis(10), "testClient");
             assertNotNull(dataSource);
 
             // test asynchronuous with time-out
@@ -119,7 +120,7 @@ class RestDataSourceTest {
     @Test
     void testRestDataSourceConnectionError() {
         try (final ZContext ctx = new ZContext()) {
-            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/testError").toString());
+            final RestDataSource dataSource = new RestDataSource(ctx, server.url("/testError").uri());
             assertNotNull(dataSource);
 
             // three retries and a successful response
@@ -143,10 +144,10 @@ class RestDataSourceTest {
 
     @Test
     @Disabled("not to be used in CI/CD environment")
-    void testLsaRestDataSource() {
+    void testLsaRestDataSource() throws URISyntaxException {
         try (final ZContext ctx = new ZContext()) {
             final String endPoint = "<add your favourite REST server here>?msg=HalloRaphael;mytime=" + System.currentTimeMillis();
-            final RestDataSource dataSource = new RestDataSource(ctx, endPoint);
+            final RestDataSource dataSource = new RestDataSource(ctx, new URI(endPoint));
             assertNotNull(dataSource);
             dataSource.enqueueRequest("lsaHashKey#1");
             receiveAndCheckData(dataSource, "lsaHashKey#1", false);

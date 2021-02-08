@@ -1,5 +1,7 @@
 package io.opencmw.client;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.Arrays;
@@ -193,7 +195,7 @@ public class DataSourcePublisher implements Runnable {
         return eventStore;
     }
 
-    public <R> Future<R> set(String endpoint, final Class<R> requestedDomainObjType, final Object requestBody, final RbacProvider... rbacProvider) {
+    public <R> Future<R> set(final URI endpoint, final Class<R> requestedDomainObjType, final Object requestBody, final RbacProvider... rbacProvider) {
         return set(endpoint, null, requestBody, requestedDomainObjType, rbacProvider);
     }
 
@@ -210,11 +212,11 @@ public class DataSourcePublisher implements Runnable {
      * @param <R> The type of the deserialised requested result domain object
      * @return A future which will be able to retrieve the deserialised result
      */
-    public <R> Future<R> set(String endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
+    public <R> Future<R> set(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
         return request(DataSourceFilter.ReplyType.SET, endpoint, requestFilter, requestBody, requestedDomainObjType, rbacProvider);
     }
 
-    public <R> Future<R> get(String endpoint, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
+    public <R> Future<R> get(final URI endpoint, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
         return get(endpoint, null, null, requestedDomainObjType, rbacProvider);
     }
 
@@ -231,11 +233,11 @@ public class DataSourcePublisher implements Runnable {
      * @param <R> The type of the deserialised requested result domain object
      * @return A future which will be able to retrieve the deserialised result
      */
-    public <R> Future<R> get(String endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
+    public <R> Future<R> get(URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
         return request(DataSourceFilter.ReplyType.GET, endpoint, requestFilter, requestBody, requestedDomainObjType, rbacProvider);
     }
 
-    private <R> ThePromisedFuture<R> request(final DataSourceFilter.ReplyType replyType, final String endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
+    private <R> ThePromisedFuture<R> request(final DataSourceFilter.ReplyType replyType, final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
         final String requestId = clientId + internalReqIdGenerator.incrementAndGet();
         final ThePromisedFuture<R> requestFuture = newFuture(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId);
         final Class<? extends IoSerialiser> matchingSerialiser = DataSource.getFactory(endpoint).getMatchingSerialiserType(endpoint);
@@ -244,7 +246,7 @@ public class DataSourcePublisher implements Runnable {
         final ZMsg msg = new ZMsg();
         msg.add(new byte[] { replyType.getID() });
         msg.add(requestId);
-        msg.add(endpoint);
+        msg.add(endpoint.toString());
         if (requestFilter == null) {
             msg.add(EMPTY_FRAME);
         } else {
@@ -275,11 +277,11 @@ public class DataSourcePublisher implements Runnable {
         return requestFuture;
     }
 
-    public <T> void subscribe(final String endpoint, final Class<T> requestedDomainObjType) {
+    public <T> void subscribe(final URI endpoint, final Class<T> requestedDomainObjType) {
         subscribe(endpoint, requestedDomainObjType, null, null);
     }
 
-    public <R> String subscribe(final String endpoint, final Class<R> requestedDomainObjType, final Map<String, Object> requestFilter, final Object requestBody, final RbacProvider... rbacProvider) {
+    public <R> String subscribe(final URI endpoint, final Class<R> requestedDomainObjType, final Map<String, Object> requestFilter, final Object requestBody, final RbacProvider... rbacProvider) {
         ThePromisedFuture<R> future = request(DataSourceFilter.ReplyType.SUBSCRIBE, endpoint, requestFilter, requestBody, requestedDomainObjType, rbacProvider);
         return future.internalRequestID;
     }
@@ -289,7 +291,7 @@ public class DataSourcePublisher implements Runnable {
         final ZMsg msg = new ZMsg();
         msg.add(new byte[] { DataSourceFilter.ReplyType.UNSUBSCRIBE.getID() });
         msg.add(requestId);
-        msg.add(requestFutureMap.get(requestId).endpoint);
+        msg.add(requestFutureMap.get(requestId).endpoint.toString());
         msg.send(perThreadControlSocket.get());
         //TODO: do we need the following 'remove()'
         perThreadControlSocket.remove();
@@ -338,24 +340,29 @@ public class DataSourcePublisher implements Runnable {
         final byte[] data = controlMsg.isEmpty() ? EMPTY_BYTE_ARRAY : controlMsg.pollFirst().getData();
         final byte[] rbacToken = controlMsg.isEmpty() ? EMPTY_BYTE_ARRAY : controlMsg.pollFirst().getData();
 
-        final DataSource client = getClient(endpoint); // get client for endpoint
-        switch (msgType) {
-        case SUBSCRIBE: // subscribe: 0b, requestId, addr/dev/prop?sel&filters, [filter]
-            client.subscribe(requestId, endpoint, rbacToken); // issue get request
-            break;
-        case GET: // get: 1b, reqId, addr/dev/prop?sel&filters, [filter]
-            client.get(requestId, endpoint, filters, data, rbacToken); // issue get request
-            break;
-        case SET: // set: 2b, reqId, addr/dev/prop?sel&filters, data, add data to blocking queue instead?
-            client.set(requestId, endpoint, filters, data, rbacToken);
-            break;
-        case UNSUBSCRIBE: //unsub: 3b, reqId, endpoint
-            client.unsubscribe(requestId);
-            requestFutureMap.remove(requestId);
-            break;
-        case UNKNOWN:
-        default:
-            throw new UnsupportedOperationException("Illegal operation type");
+        try {
+            final URI ep = new URI(endpoint);
+            final DataSource client = getClient(ep); // get client for endpoint
+            switch (msgType) {
+                case SUBSCRIBE: // subscribe: 0b, requestId, addr/dev/prop?sel&filters, [filter]
+                    client.subscribe(requestId, ep, rbacToken); // issue get request
+                    break;
+                case GET: // get: 1b, reqId, addr/dev/prop?sel&filters, [filter]
+                    client.get(requestId, ep, filters, data, rbacToken); // issue get request
+                    break;
+                case SET: // set: 2b, reqId, addr/dev/prop?sel&filters, data, add data to blocking queue instead?
+                    client.set(requestId, ep, filters, data, rbacToken);
+                    break;
+                case UNSUBSCRIBE: //unsub: 3b, reqId, endpoint
+                    client.unsubscribe(requestId);
+                    requestFutureMap.remove(requestId);
+                    break;
+                case UNKNOWN:
+                default:
+                    throw new UnsupportedOperationException("Illegal operation type");
+            }
+        } catch (final URISyntaxException e) {
+            throw new UnsupportedOperationException("Invalid URI format: ", e);
         }
         return true;
     }
@@ -395,30 +402,34 @@ public class DataSourcePublisher implements Runnable {
         return dataAvailable;
     }
 
-    protected <R> ThePromisedFuture<R> newFuture(final String endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String requestId) {
+    protected <R> ThePromisedFuture<R> newFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String requestId) {
         final ThePromisedFuture<R> requestFuture = new ThePromisedFuture<>(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId);
         final Object oldEntry = requestFutureMap.put(requestId, requestFuture);
         assert oldEntry == null : "requestID '" + requestId + "' already present in requestFutureMap";
         return requestFuture;
     }
 
-    private DataSource getClient(final String endpoint) {
-        return clientMap.computeIfAbsent(new Endpoint(endpoint).getAddress(), requestedEndPoint -> {
-            final DataSource dataSource = DataSource.getFactory(requestedEndPoint).newInstance(context, endpoint, Duration.ofMillis(100), Long.toString(internalReqIdGenerator.incrementAndGet()));
-            poller.register(dataSource.getSocket(), ZMQ.Poller.POLLIN);
-            return dataSource;
+    private DataSource getClient(final URI endpoint) {
+        return clientMap.computeIfAbsent(endpoint.getScheme() + "://" + endpoint.getAuthority(), requestedEndPoint -> {
+            try {
+                final DataSource dataSource = DataSource.getFactory(new URI(requestedEndPoint)).newInstance(context, endpoint, Duration.ofMillis(100), Long.toString(internalReqIdGenerator.incrementAndGet()));
+                poller.register(dataSource.getSocket(), ZMQ.Poller.POLLIN);
+                return dataSource;
+            } catch (final URISyntaxException e) {
+                throw new UnsupportedOperationException("Illegal URI: ", e);
+            }
         });
     }
 
     public static class ThePromisedFuture<R> extends CustomFuture<R> { // NOPMD - no need for setters/getters here
-        private final String endpoint;
+        private final URI endpoint;
         private final Map<String, Object> requestFilter;
         private final Object requestBody;
         private final Class<R> requestedDomainObjType;
         private final DataSourceFilter.ReplyType replyType;
         private final String internalRequestID;
 
-        public ThePromisedFuture(final String endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String internalRequestID) {
+        public ThePromisedFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String internalRequestID) {
             super();
             this.endpoint = endpoint;
             this.requestFilter = requestFilter;
@@ -428,7 +439,7 @@ public class DataSourcePublisher implements Runnable {
             this.internalRequestID = internalRequestID;
         }
 
-        public String getEndpoint() {
+        public URI getEndpoint() {
             return endpoint;
         }
 

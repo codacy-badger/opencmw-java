@@ -2,6 +2,8 @@ package io.opencmw.client;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
@@ -28,24 +30,20 @@ class DataSourcePublisherTest {
     private final Integer requestBody = 10;
     private final Map<String, Object> requestFilter = new HashMap<>();
 
-    private DataSourcePublisher.ThePromisedFuture<Float> getTestFuture() {
-        return new DataSourcePublisher.ThePromisedFuture<>("endPoint", requestFilter, requestBody, Float.class, DataSourceFilter.ReplyType.GET, "TestClientID");
-    }
-
     private static class TestDataSource extends DataSource {
         public static final Factory FACTORY = new Factory() {
             @Override
-            public boolean matches(final String endpoint) {
-                return endpoint.startsWith("test://");
+            public boolean matches(final URI endpoint) {
+                return endpoint.getScheme().equals("test");
             }
 
             @Override
-            public Class<? extends IoSerialiser> getMatchingSerialiserType(final String endpoint) {
+            public Class<? extends IoSerialiser> getMatchingSerialiserType(final URI endpoint) {
                 return BinarySerialiser.class;
             }
 
             @Override
-            public DataSource newInstance(final ZContext context, final String endpoint, final Duration timeout, final String clientId) {
+            public DataSource newInstance(final ZContext context, final URI endpoint, final Duration timeout, final String clientId) {
                 return new TestDataSource(context, endpoint, timeout, clientId);
             }
         };
@@ -55,11 +53,11 @@ class DataSourcePublisherTest {
         private ZMQ.Socket internalSocket;
         private long nextHousekeeping = 0;
         private final IoClassSerialiser ioClassSerialiser = new IoClassSerialiser(new FastByteBuffer(2000));
-        private final Map<String, String> subscriptions = new HashMap<>();
-        private final Map<String, String> requests = new HashMap<>();
+        private final Map<String, URI> subscriptions = new HashMap<>();
+        private final Map<String, URI> requests = new HashMap<>();
         private long nextNotification = 0L;
 
-        public TestDataSource(final ZContext context, final String endpoint, final Duration timeOut, final String clientId) {
+        public TestDataSource(final ZContext context, final URI endpoint, final Duration timeOut, final String clientId) {
             super(endpoint);
             this.context = context;
             this.socket = context.createSocket(SocketType.DEALER);
@@ -78,7 +76,7 @@ class DataSourcePublisherTest {
                         }
                         final ZMsg msg = new ZMsg();
                         msg.add(subscriptionId);
-                        msg.add(endpoint);
+                        msg.add(endpoint.toString());
                         msg.add(new byte[0]); // header
                         ioClassSerialiser.getDataBuffer().reset();
                         ioClassSerialiser.serialiseObject(testObject.get());
@@ -96,7 +94,7 @@ class DataSourcePublisherTest {
                     }
                     final ZMsg msg = new ZMsg();
                     msg.add(requestId);
-                    msg.add(endpoint);
+                    msg.add(endpoint.toString());
                     msg.add(new byte[0]); // header
                     ioClassSerialiser.getDataBuffer().reset();
                     ioClassSerialiser.serialiseObject(testObject.get());
@@ -112,12 +110,12 @@ class DataSourcePublisherTest {
         }
 
         @Override
-        public void get(final String requestId, final String endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
+        public void get(final String requestId, final URI endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
             requests.put(requestId, endpoint);
         }
 
         @Override
-        public void set(final String requestId, final String endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
+        public void set(final String requestId, final URI endpoint, final byte[] filters, final byte[] data, final byte[] rbacToken) {
             throw new UnsupportedOperationException("cannot perform set");
         }
 
@@ -137,7 +135,7 @@ class DataSourcePublisherTest {
         }
 
         @Override
-        public void subscribe(final String reqId, final String endpoint, final byte[] rbacToken) {
+        public void subscribe(final String reqId, final URI endpoint, final byte[] rbacToken) {
             subscriptions.put(reqId, endpoint);
         }
 
@@ -185,7 +183,7 @@ class DataSourcePublisherTest {
     }
 
     @Test
-    void testSubscribe() {
+    void testSubscribe() throws URISyntaxException {
         final AtomicBoolean eventReceived = new AtomicBoolean(false);
         final TestObject referenceObject = new TestObject("foo", 1.337);
         testObject.set(referenceObject);
@@ -203,13 +201,13 @@ class DataSourcePublisherTest {
         eventStore.start();
         new Thread(dataSourcePublisher).start();
 
-        dataSourcePublisher.subscribe("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar", TestObject.class);
+        dataSourcePublisher.subscribe(new URI("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar"), TestObject.class);
 
         Awaitility.waitAtMost(Duration.ofSeconds(1)).until(eventReceived::get);
     }
 
     @Test
-    void testGet() throws InterruptedException, ExecutionException, TimeoutException {
+    void testGet() throws InterruptedException, ExecutionException, TimeoutException, URISyntaxException {
         final TestObject referenceObject = new TestObject("foo", 1.337);
         testObject.set(referenceObject);
 
@@ -222,14 +220,14 @@ class DataSourcePublisherTest {
         eventStore.start();
         new Thread(dataSourcePublisher).start();
 
-        final Future<TestObject> future = dataSourcePublisher.get("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar", TestObject.class);
+        final Future<TestObject> future = dataSourcePublisher.get(new URI("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar"), TestObject.class);
 
         final TestObject result = future.get(1000, TimeUnit.MILLISECONDS);
         assertEquals(referenceObject, result);
     }
 
     @Test
-    void testGetTimeout() {
+    void testGetTimeout() throws URISyntaxException {
         testObject.set(null); // makes the test event source not answer the get request
 
         DataSource.register(TestDataSource.FACTORY);
@@ -241,20 +239,20 @@ class DataSourcePublisherTest {
         eventStore.start();
         new Thread(dataSourcePublisher).start();
 
-        final Future<TestObject> future = dataSourcePublisher.get("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar", TestObject.class);
+        final Future<TestObject> future = dataSourcePublisher.get(new URI("test://foobar/testdev/prop?ctx=FAIR.SELECTOR.ALL&filter=foobar"), TestObject.class);
 
         assertThrows(TimeoutException.class, () -> future.get(1, TimeUnit.MILLISECONDS));
     }
 
     @Test
-    void testFuture() throws InterruptedException, ExecutionException {
+    void testFuture() throws InterruptedException, ExecutionException, URISyntaxException {
         final Float replyObject = (float) Math.PI;
 
         {
             final DataSourcePublisher.ThePromisedFuture<Float> future = getTestFuture();
 
             assertNotNull(future);
-            assertEquals("endPoint", future.getEndpoint());
+            assertEquals(new URI("test://server:1234/test?foo=bar"), future.getEndpoint());
             assertEquals(requestFilter, future.getRequestFilter());
             assertEquals(requestBody, future.getRequestBody());
             assertEquals(Float.class, future.getRequestedDomainObjType());
@@ -287,4 +285,9 @@ class DataSourcePublisherTest {
             assertThrows(CancellationException.class, () -> future.get(1, TimeUnit.SECONDS));
         }
     }
+
+    private DataSourcePublisher.ThePromisedFuture<Float> getTestFuture() throws URISyntaxException {
+        return new DataSourcePublisher.ThePromisedFuture<>(new URI("test://server:1234/test?foo=bar"), requestFilter, requestBody, Float.class, DataSourceFilter.ReplyType.GET, "TestClientID");
+    }
+
 }
