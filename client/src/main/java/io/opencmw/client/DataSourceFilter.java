@@ -3,19 +3,20 @@ package io.opencmw.client;
 import io.opencmw.Filter;
 import io.opencmw.serialiser.IoSerialiser;
 
+import java.net.URI;
+
 public class DataSourceFilter implements Filter {
     public ReplyType eventType = ReplyType.UNKNOWN;
     public Class<? extends IoSerialiser> protocolType;
-    public String device;
-    public String property;
+    public URI endpoint = null;
     public DataSourcePublisher.ThePromisedFuture<?> future;
     public String context;
 
     @Override
     public void clear() {
         eventType = ReplyType.UNKNOWN;
-        device = "UNKNOWN";
-        property = "UNKNOWN";
+        protocolType = null; // NOPMD - have to clear the future because the events are reused
+        endpoint = null; // NOPMD - have to clear the future because the events are reused
         future = null; // NOPMD - have to clear the future because the events are reused
         context = "";
     }
@@ -25,10 +26,10 @@ public class DataSourceFilter implements Filter {
         if (other instanceof DataSourceFilter) {
             final DataSourceFilter otherDSF = (DataSourceFilter) other;
             otherDSF.eventType = eventType;
-            otherDSF.device = device;
-            otherDSF.property = property;
+            otherDSF.endpoint = endpoint;
             otherDSF.future = future;
             otherDSF.context = context;
+            otherDSF.protocolType = protocolType;
         }
     }
 

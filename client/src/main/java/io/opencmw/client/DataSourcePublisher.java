@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,66 +88,46 @@ public class DataSourcePublisher implements Runnable {
         eventStore.register((event, sequence, endOfBatch) -> {
             final DataSourceFilter dataSourceFilter = event.getFilter(DataSourceFilter.class);
             final ThePromisedFuture<?> future = dataSourceFilter.future;
-            if (future.replyType == DataSourceFilter.ReplyType.SUBSCRIBE) {
+            if (future.replyType == DataSourceFilter.ReplyType.SUBSCRIBE || future.replyType == DataSourceFilter.ReplyType.GET || future.replyType == DataSourceFilter.ReplyType.SET) {
                 final Class<?> domainClass = future.getRequestedDomainObjType();
+                // get data from socket
                 final ZMsg cmwMsg = event.payload.get(ZMsg.class);
                 cmwMsg.poll().getString(Charset.defaultCharset()); // ignore header
                 final byte[] body = cmwMsg.poll().getData();
-                final String exc = cmwMsg.poll().getString(Charset.defaultCharset());
+                String exc = cmwMsg.poll().getString(Charset.defaultCharset());
                 Object domainObj = null;
-                if (body != null && body.length != 0) {
-                    ioClassSerialiser.setDataBuffer(FastByteBuffer.wrap(body));
-                    domainObj = ioClassSerialiser.deserialiseObject(domainClass);
-                    ioClassSerialiser.setDataBuffer(byteBuffer); // allow received byte array to be released
-                }
-                publicationTarget.getRingBuffer().publishEvent((publishEvent, seq, obj) -> {
-                    final TimingCtx contextFilter = publishEvent.getFilter(TimingCtx.class);
-                    final EvtTypeFilter evtTypeFilter = publishEvent.getFilter(EvtTypeFilter.class);
-                    publishEvent.arrivalTimeStamp = event.arrivalTimeStamp;
-                    publishEvent.payload = new SharedPointer<>();
-                    publishEvent.payload.set(obj);
-                    if (exc != null && !exc.isBlank()) {
-                        publishEvent.throwables.add(new Exception(exc));
-                    }
-                    try {
-                        contextFilter.setSelector(dataSourceFilter.context, 0);
-                    } catch (IllegalArgumentException e) {
-                        LOGGER.atError().setCause(e).addArgument(dataSourceFilter.context).log("No valid context: {}");
-                    }
-                    // contextFilter.acqts = msg.dataContext.acqStamp; // needs to be added?
-                    // contextFilter.ctxName = // what should go here?
-                    evtTypeFilter.evtType = EvtTypeFilter.DataType.DEVICE_DATA;
-                    evtTypeFilter.typeName = dataSourceFilter.device + '/' + dataSourceFilter.property;
-                    evtTypeFilter.updateType = EvtTypeFilter.UpdateType.COMPLETE;
-                }, domainObj);
-            } else if (future.replyType == DataSourceFilter.ReplyType.GET) {
-                // get data from socket
-                final ZMsg cmwMsg = event.payload.get(ZMsg.class);
-                final String header = cmwMsg.poll().getString(Charset.defaultCharset());
-                final byte[] body = cmwMsg.poll().getData();
-                final String exc = cmwMsg.poll().getString(Charset.defaultCharset());
-                // deserialise
-                Object obj = null;
-                if (body != null && body.length != 0) {
-                    ioClassSerialiser.setDataBuffer(FastByteBuffer.wrap(body));
-                    obj = ioClassSerialiser.deserialiseObject(future.getRequestedDomainObjType());
-                    ioClassSerialiser.setDataBuffer(byteBuffer); // allow received byte array to be released
-                }
-                // notify future
+                final boolean notifyFuture = future.replyType == DataSourceFilter.ReplyType.GET || future.replyType == DataSourceFilter.ReplyType.SET;
                 if (exc == null || exc.isBlank()) {
-                    future.castAndSetReply(obj);
-                } else {
-                    future.setException(new Exception(exc));
+                    try {
+                        if (body != null && body.length != 0) {
+                            // deserialise
+                            ioClassSerialiser.setDataBuffer(FastByteBuffer.wrap(body));
+                            domainObj = ioClassSerialiser.deserialiseObject(future.getRequestedDomainObjType());
+                            ioClassSerialiser.setDataBuffer(byteBuffer); // allow received byte array to be released
+                        }
+                        if (notifyFuture) {
+                            future.castAndSetReply(domainObj); // notify callback
+                        }
+                    } catch (Exception e) {
+                        if (notifyFuture) {
+                            exc = "Error deserialising object: " + e.getMessage();
+                            future.setException(e);
+                        }
+                    }
+                } else if (notifyFuture){
+                    future.setException(new Exception(exc)); // notify exception callback
                 }
                 // publish to ring buffer
-                publicationTarget.getRingBuffer().publishEvent((publishEvent, seq, o) -> {
+                publicationTarget.getRingBuffer().publishEvent((publishEvent, seq, obj, exception) -> {
                     final TimingCtx contextFilter = publishEvent.getFilter(TimingCtx.class);
                     final EvtTypeFilter evtTypeFilter = publishEvent.getFilter(EvtTypeFilter.class);
                     publishEvent.arrivalTimeStamp = event.arrivalTimeStamp;
+                    if (exception != null && !exception.isBlank()) {
+                        publishEvent.throwables.add(new Exception(exception));
+                    }
                     publishEvent.payload = new SharedPointer<>();
-                    publishEvent.payload.set(o);
-                    if (exc != null && !exc.isBlank()) {
-                        publishEvent.throwables.add(new Exception(exc));
+                    if (obj != null) {
+                        publishEvent.payload.set(obj);
                     }
                     try {
                         contextFilter.setSelector(dataSourceFilter.context, 0);
@@ -156,9 +137,9 @@ public class DataSourcePublisher implements Runnable {
                     // contextFilter.acqts = msg.dataContext.acqStamp; // needs to be added?
                     // contextFilter.ctxName = // what should go here?
                     evtTypeFilter.evtType = EvtTypeFilter.DataType.DEVICE_DATA;
-                    evtTypeFilter.typeName = dataSourceFilter.device + '/' + dataSourceFilter.property;
+                    evtTypeFilter.typeName = dataSourceFilter.endpoint.toString();
                     evtTypeFilter.updateType = EvtTypeFilter.UpdateType.COMPLETE;
-                }, obj);
+                }, domainObj, exc);
             } else {
                 // ignore other reply types for now
                 // todo: publish statistics, connection state and getRequests
@@ -387,16 +368,18 @@ public class DataSourcePublisher implements Runnable {
                         : "requestID mismatch";
                     requestFutureMap.remove(reqId);
                 }
-                final Endpoint endpoint = new Endpoint(reply.pollFirst().getString(Charset.defaultCharset())); // NOPMD - need to create new Endpoint
+                final String endpoint = reply.pollFirst().getString(Charset.defaultCharset()); // NOPMD - need to create new Endpoint
                 event.arrivalTimeStamp = System.currentTimeMillis();
                 event.payload = new SharedPointer<>(); // NOPMD - need to create new shared pointer instance
                 event.payload.set(reply); // ZMsg containing header, body and exception frame
                 final DataSourceFilter dataSourceFilter = event.getFilter(DataSourceFilter.class);
                 dataSourceFilter.future = returnFuture;
-                dataSourceFilter.eventType = DataSourceFilter.ReplyType.SUBSCRIBE;
-                dataSourceFilter.device = endpoint.getDevice();
-                dataSourceFilter.property = endpoint.getProperty();
-                dataSourceFilter.context = endpoint.getSelector();
+                dataSourceFilter.eventType = returnFuture.replyType;
+                dataSourceFilter.endpoint = URI.create(endpoint);
+                final Map<String, String> queryParams= Arrays.stream(dataSourceFilter.endpoint.getQuery().split("&")) // stream of key-value pairs
+                        .map(s -> s.split("=", 2)) // split keys and values
+                        .collect(Collectors.toMap(a -> a[0], a -> a.length > 1 ? a[1] : ""));
+                dataSourceFilter.context = queryParams.getOrDefault("ctx", "");
             });
         }
         return dataAvailable;

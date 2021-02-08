@@ -12,6 +12,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
 import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
@@ -26,6 +28,7 @@ import io.opencmw.serialiser.spi.BinarySerialiser;
 import io.opencmw.serialiser.spi.FastByteBuffer;
 
 class DataSourcePublisherTest {
+    private static final Logger LOGGER = LoggerFactory.getLogger(DataSourcePublisherTest.class);
     private static final AtomicReference<TestObject> testObject = new AtomicReference<>();
     private final Integer requestBody = 10;
     private final Map<String, Object> requestFilter = new HashMap<>();
@@ -102,6 +105,7 @@ class DataSourcePublisherTest {
                     msg.add(Arrays.copyOfRange(ioClassSerialiser.getDataBuffer().elements(), 0, ioClassSerialiser.getDataBuffer().position() + 4));
                     msg.add(new byte[0]); // exception
                     msg.send(internalSocket);
+                    LOGGER.atDebug().addArgument(requestId).addArgument(testObject.get()).log("answering request({}): {}");
                 });
                 requests.clear();
                 nextHousekeeping = currentTime + 200;

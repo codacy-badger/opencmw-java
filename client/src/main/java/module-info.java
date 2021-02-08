@@ -10,6 +10,7 @@ module io.opencmw.client {
     requires java.validation;
     requires kotlin.stdlib;
     requires it.unimi.dsi.fastutil;
+    requires org.apache.commons.lang3;
 
     exports io.opencmw.client.cmwlight;
     exports io.opencmw.client.rest;
