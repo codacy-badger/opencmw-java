@@ -1,7 +1,9 @@
 package io.opencmw.client;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.Arrays;
@@ -378,7 +380,13 @@ public class DataSourcePublisher implements Runnable {
                 dataSourceFilter.endpoint = URI.create(endpoint);
                 final Map<String, String> queryParams= Arrays.stream(dataSourceFilter.endpoint.getQuery().split("&")) // stream of key-value pairs
                         .map(s -> s.split("=", 2)) // split keys and values
-                        .collect(Collectors.toMap(a -> a[0], a -> a.length > 1 ? a[1] : ""));
+                        .collect(Collectors.toMap(a -> a[0], a -> {
+                            try {
+                                return a.length > 1 ? URLDecoder.decode(a[1], Charset.defaultCharset().name()) : "";
+                            } catch (UnsupportedEncodingException e) {
+                                return "";
+                            }
+                        }));
                 dataSourceFilter.context = queryParams.getOrDefault("ctx", "");
             });
         }

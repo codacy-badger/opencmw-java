@@ -1,6 +1,7 @@
 package io.opencmw.client;
 
 import io.opencmw.EventStore;
+import io.opencmw.MimeType;
 import io.opencmw.filter.EvtTypeFilter;
 import io.opencmw.filter.TimingCtx;
 import io.opencmw.rbac.BasicRbacRole;
@@ -95,8 +96,9 @@ class OpenCmwDataSourceTest {
                 TestObject.class,
                 TestObject.class);
         worker.setHandler((ctx, requestCtx, request, replyCtx, reply) -> {
+            assertEquals("FAIR.SELECTOR.C=3", requestCtx.ctx);
+            replyCtx.ctx = "FAIR.SELECTOR.C=3:P=5";
             reply.set(referenceObject);
-            assertEquals("testContext", requestCtx.ctx);
             LOGGER.atDebug().addArgument(requestCtx).addArgument(request).addArgument(replyCtx).addArgument(reply).log("got get request: {}, {} -> {}, {}");
         });
         worker.start();
@@ -110,7 +112,7 @@ class OpenCmwDataSourceTest {
         eventStore.start();
         new Thread(dataSourcePublisher).start();
         LockSupport.parkNanos(Duration.ofMillis(200).toNanos());
-        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=testContext", null);
+        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=3&mimeType=application/octet-stream", null);
         LOGGER.atDebug().addArgument(requestURI).log("requesting GET from endpoint: {}");
         final Future<TestObject> future = dataSourcePublisher.get(requestURI , TestObject.class);
         final TestObject result = future.get(1000, TimeUnit.MILLISECONDS);
@@ -137,8 +139,9 @@ class OpenCmwDataSourceTest {
                 TestObject.class,
                 TestObject.class);
         worker.setHandler((ctx, requestCtx, request, replyCtx, reply) -> {
+            assertEquals("FAIR.SELECTOR.C=3", requestCtx.ctx);
+            replyCtx.ctx = "FAIR.SELECTOR.C=3:P=5";
             reply.set(request);
-            assertEquals("testContext", requestCtx.ctx);
             LOGGER.atDebug().addArgument(requestCtx).addArgument(request).addArgument(replyCtx).addArgument(reply).log("got get request: {}, {} -> {}, {}");
         });
         worker.start();
@@ -152,7 +155,7 @@ class OpenCmwDataSourceTest {
         eventStore.start();
         new Thread(dataSourcePublisher).start();
         LockSupport.parkNanos(Duration.ofMillis(200).toNanos());
-        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=testContext", null);
+        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=3", null);
         LOGGER.atDebug().addArgument(requestURI).log("requesting GET from endpoint: {}");
         final Future<TestObject> future = dataSourcePublisher.set(requestURI , TestObject.class, toSet);
         final TestObject result = future.get(1000, TimeUnit.MILLISECONDS);
@@ -206,6 +209,7 @@ class OpenCmwDataSourceTest {
 
     public static class TestContext {
         public String ctx;
+        public MimeType contentType = MimeType.BINARY;
 
         public TestContext() {
             // do nothing, needed for reflexive instantiation
