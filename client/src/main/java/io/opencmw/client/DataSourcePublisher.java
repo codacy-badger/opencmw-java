@@ -7,9 +7,9 @@ import java.net.URLDecoder;
 import java.nio.charset.Charset;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.EventListener;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -36,6 +36,8 @@ import io.opencmw.utils.SharedPointer;
 
 import com.lmax.disruptor.EventHandler;
 
+import static io.opencmw.client.DataSourceFilter.ReplyType.SUBSCRIBE;
+
 /**
  * Publishes events from different sources into a common {@link EventStore} and takes care of setting the appropriate
  * filters and deserialisation of the domain objects.
@@ -57,7 +59,7 @@ public class DataSourcePublisher implements Runnable {
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicInteger internalReqIdGenerator = new AtomicInteger(0);
-    private final EventStore eventStore;
+    private final EventStore rawDataEventStore;
     private final ZMQ.Poller poller;
     private final ZContext context = new ZContext(1);
     private final ZMQ.Socket controlSocket;
@@ -84,13 +86,14 @@ public class DataSourcePublisher implements Runnable {
     };
     private final String clientId;
     private final RbacProvider rbacProvider;
+    private final ExecutorService executer = Executors.newCachedThreadPool();
 
     public DataSourcePublisher(final RbacProvider rbacProvider, final EventStore publicationTarget, final String... clientId) {
         this(rbacProvider, clientId);
-        eventStore.register((event, sequence, endOfBatch) -> {
+        rawDataEventStore.register((event, sequence, endOfBatch) -> {
             final DataSourceFilter dataSourceFilter = event.getFilter(DataSourceFilter.class);
             final ThePromisedFuture<?> future = dataSourceFilter.future;
-            if (future.replyType == DataSourceFilter.ReplyType.SUBSCRIBE || future.replyType == DataSourceFilter.ReplyType.GET || future.replyType == DataSourceFilter.ReplyType.SET) {
+            if (future.replyType == SUBSCRIBE || future.replyType == DataSourceFilter.ReplyType.GET || future.replyType == DataSourceFilter.ReplyType.SET) {
                 final Class<?> domainClass = future.getRequestedDomainObjType();
                 // get data from socket
                 final ZMsg cmwMsg = event.payload.get(ZMsg.class);
@@ -110,14 +113,23 @@ public class DataSourcePublisher implements Runnable {
                         if (notifyFuture) {
                             future.castAndSetReply(domainObj); // notify callback
                         }
+                        if (future.listener != null){
+                            final Object finalDomainObj = domainObj;
+                            executer.submit(() -> future.notifyListener(finalDomainObj));
+                            // todo: invoke subscription listener
+                        }
                     } catch (Exception e) {
                         if (notifyFuture) {
                             exc = "Error deserialising object: " + e.getMessage();
                             future.setException(e);
+                        } else {
+                            // todo: invoke exception listener
                         }
                     }
                 } else if (notifyFuture){
                     future.setException(new Exception(exc)); // notify exception callback
+                } else {
+                    // todo: invoke exception listener
                 }
                 // publish to ring buffer
                 publicationTarget.getRingBuffer().publishEvent((publishEvent, seq, obj, exception) -> {
@@ -152,7 +164,7 @@ public class DataSourcePublisher implements Runnable {
 
     public DataSourcePublisher(final RbacProvider rbacProvider, final EventHandler<RingBufferEvent> eventHandler, final String... clientId) {
         this(rbacProvider, clientId);
-        eventStore.register(eventHandler);
+        rawDataEventStore.register(eventHandler);
     }
 
     public DataSourcePublisher(final RbacProvider rbacProvider, final String... clientId) {
@@ -162,7 +174,7 @@ public class DataSourcePublisher implements Runnable {
         controlSocket.bind(inprocCtrl);
         poller.register(controlSocket, ZMQ.Poller.POLLIN);
         // instantiate event store
-        eventStore = EventStore.getFactory().setSingleProducer(true).setFilterConfig(DataSourceFilter.class).build();
+        rawDataEventStore = EventStore.getFactory().setSingleProducer(true).setFilterConfig(DataSourceFilter.class).build();
         // register default handlers // TODO: find out how to do this without having to reference them directly
         // DataSource.register(CmwLightClient.FACTORY);
         // DataSource.register(RestDataSource.FACTORY);
@@ -174,8 +186,8 @@ public class DataSourcePublisher implements Runnable {
         return context;
     }
 
-    public EventStore getEventStore() {
-        return eventStore;
+    public EventStore getRawDataEventStore() {
+        return rawDataEventStore;
     }
 
     public <R> Future<R> set(final URI endpoint, final Class<R> requestedDomainObjType, final Object requestBody, final RbacProvider... rbacProvider) {
@@ -222,7 +234,7 @@ public class DataSourcePublisher implements Runnable {
 
     private <R> ThePromisedFuture<R> request(final DataSourceFilter.ReplyType replyType, final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final RbacProvider... rbacProvider) {
         final String requestId = clientId + internalReqIdGenerator.incrementAndGet();
-        final ThePromisedFuture<R> requestFuture = newFuture(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId);
+        final ThePromisedFuture<R> requestFuture = newRequestFuture(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId);
         final Class<? extends IoSerialiser> matchingSerialiser = DataSource.getFactory(endpoint).getMatchingSerialiserType(endpoint);
 
         // signal socket for get with endpoint and request id
@@ -264,8 +276,34 @@ public class DataSourcePublisher implements Runnable {
         subscribe(endpoint, requestedDomainObjType, null, null);
     }
 
+    public <R,T> String subscribe(final URI endpoint, final R context, final Class<T> requestedDomainObjType, NotificationListener<T> listener) {
+        final String requestId = clientId + internalReqIdGenerator.incrementAndGet();
+        final ThePromisedFuture<T> requestFuture = newSubscriptionFuture(endpoint, null, null, requestedDomainObjType, SUBSCRIBE,  requestId, listener);
+        final Class<? extends IoSerialiser> matchingSerialiser = DataSource.getFactory(endpoint).getMatchingSerialiserType(endpoint);
+
+        // signal socket for get with endpoint and request id
+        final ZMsg msg = new ZMsg();
+        msg.add(new byte[] {SUBSCRIBE.getID()});
+        msg.add(requestId);
+        msg.add(endpoint.toString()); // todo: add context to query string
+        msg.add(EMPTY_FRAME);
+        msg.add(EMPTY_FRAME);
+        // RBAC
+        if (this.rbacProvider != null) {
+            final RbacProvider rbac = this.rbacProvider; // NOPMD - future use
+            // rbac.sign(msg); // todo: sign message and add rbac token and signature
+        } else {
+            msg.add(EMPTY_FRAME);
+        }
+
+        msg.send(perThreadControlSocket.get());
+        //TODO: do we need the following 'remove()'
+        perThreadControlSocket.remove();
+        return requestFuture.getInternalRequestID();
+    }
+
     public <R> String subscribe(final URI endpoint, final Class<R> requestedDomainObjType, final Map<String, Object> requestFilter, final Object requestBody, final RbacProvider... rbacProvider) {
-        ThePromisedFuture<R> future = request(DataSourceFilter.ReplyType.SUBSCRIBE, endpoint, requestFilter, requestBody, requestedDomainObjType, rbacProvider);
+        ThePromisedFuture<R> future = request(SUBSCRIBE, endpoint, requestFilter, requestBody, requestedDomainObjType, rbacProvider);
         return future.internalRequestID;
     }
 
@@ -280,10 +318,18 @@ public class DataSourcePublisher implements Runnable {
         perThreadControlSocket.remove();
     }
 
+    public void start() {
+        new Thread(null,this, "DataSourceProducerThread-" + clientId, 0).start(); // NOPMD - not a webapp
+    }
+
+    public void stop() {
+        running.set(false);
+    }
+
     @Override
     public void run() {
         // start the ring buffer and its processors
-        eventStore.start();
+        rawDataEventStore.start();
         // event loop polling all data sources and performing regular housekeeping jobs
         running.set(true);
         long nextHousekeeping = System.currentTimeMillis(); // immediately perform first housekeeping
@@ -300,11 +346,11 @@ public class DataSourcePublisher implements Runnable {
             nextHousekeeping = clientMap.values().stream().mapToLong(DataSource::housekeeping).min().orElse(System.currentTimeMillis() + 1000);
             tout = nextHousekeeping - System.currentTimeMillis();
         }
-        LOGGER.atDebug().addArgument(clientMap.values()).log("poller returned negative value - abort run() - clients = {}");
-    }
-
-    public void start() {
-        new Thread(this).start(); // NOPMD - not a webapp
+        if (running.get()) {
+            LOGGER.atError().addArgument(clientMap.values()).log("poller returned negative value - abort run() - clients = {}");
+        } else {
+            LOGGER.atDebug().log("Shutting down DataSourcePublisher");
+        }
     }
 
     protected boolean handleControlSocket() {
@@ -362,10 +408,10 @@ public class DataSourcePublisher implements Runnable {
                 continue; // there was data received, but only used for internal state of the client
             }
             // the received data consists of the following frames: replyType(byte), reqId(string), endpoint(string), dataBody(byte[])
-            eventStore.getRingBuffer().publishEvent((event, sequence) -> {
+            rawDataEventStore.getRingBuffer().publishEvent((event, sequence) -> {
                 final String reqId = reply.pollFirst().getString(Charset.defaultCharset());
                 final ThePromisedFuture<?> returnFuture = requestFutureMap.get(reqId);
-                if (returnFuture.getReplyType() != DataSourceFilter.ReplyType.SUBSCRIBE) { // remove entries for one time replies
+                if (returnFuture.getReplyType() != SUBSCRIBE) { // remove entries for one time replies
                     assert returnFuture.getInternalRequestID().equals(reqId)
                         : "requestID mismatch";
                     requestFutureMap.remove(reqId);
@@ -393,8 +439,15 @@ public class DataSourcePublisher implements Runnable {
         return dataAvailable;
     }
 
-    protected <R> ThePromisedFuture<R> newFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String requestId) {
-        final ThePromisedFuture<R> requestFuture = new ThePromisedFuture<>(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId);
+    protected <R> ThePromisedFuture<R> newRequestFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String requestId) {
+        final ThePromisedFuture<R> requestFuture = new ThePromisedFuture<>(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId, null);
+        final Object oldEntry = requestFutureMap.put(requestId, requestFuture);
+        assert oldEntry == null : "requestID '" + requestId + "' already present in requestFutureMap";
+        return requestFuture;
+    }
+
+    protected <R> ThePromisedFuture<R> newSubscriptionFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String requestId, final NotificationListener<R> listener) {
+        final ThePromisedFuture<R> requestFuture = new ThePromisedFuture<>(endpoint, requestFilter, requestBody, requestedDomainObjType, replyType, requestId, listener);
         final Object oldEntry = requestFutureMap.put(requestId, requestFuture);
         assert oldEntry == null : "requestID '" + requestId + "' already present in requestFutureMap";
         return requestFuture;
@@ -419,8 +472,9 @@ public class DataSourcePublisher implements Runnable {
         private final Class<R> requestedDomainObjType;
         private final DataSourceFilter.ReplyType replyType;
         private final String internalRequestID;
+        private final NotificationListener<R> listener;
 
-        public ThePromisedFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String internalRequestID) {
+        public ThePromisedFuture(final URI endpoint, final Map<String, Object> requestFilter, final Object requestBody, final Class<R> requestedDomainObjType, final DataSourceFilter.ReplyType replyType, final String internalRequestID, final NotificationListener<R> listener) {
             super();
             this.endpoint = endpoint;
             this.requestFilter = requestFilter;
@@ -428,6 +482,7 @@ public class DataSourcePublisher implements Runnable {
             this.requestedDomainObjType = requestedDomainObjType;
             this.replyType = replyType;
             this.internalRequestID = internalRequestID;
+            this.listener = listener;
         }
 
         public URI getEndpoint() {
@@ -458,5 +513,19 @@ public class DataSourcePublisher implements Runnable {
         public String getInternalRequestID() {
             return internalRequestID;
         }
+
+        public void notifyListener(final Object obj) {
+            if (obj != null && requestedDomainObjType.isAssignableFrom(obj.getClass())) {
+                listener.dataUpdate(((R) obj));
+            } else {
+                LOGGER.atError().addArgument(requestedDomainObjType.getName()).addArgument(obj == null ? "null" : obj.getClass().getName()).log("Got wrong type for notification, got {} expected {}");
+            }
+
+        }
+    }
+
+    public interface NotificationListener<R> {
+        void dataUpdate(final R updatedObject);
+        void updateException(final String message);
     }
 }

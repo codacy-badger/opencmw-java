@@ -50,7 +50,7 @@ class OpenCmwDataSourceTest {
 
         DataSource.register(OpenCmwDataSource.FACTORY);
         final EventStore eventStore = EventStore.getFactory().setFilterConfig(TimingCtx.class, EvtTypeFilter.class).build();
-        final DataSourcePublisher dataSourcePublisher = new DataSourcePublisher(null, eventStore);
+        final DataSourcePublisher dataSourcePublisher = new DataSourcePublisher(null, eventStore); // add thread pool for subscription handlers
 
         final Map<String, TestObject> updates = new ConcurrentHashMap<>();
 
@@ -60,11 +60,12 @@ class OpenCmwDataSourceTest {
         });
 
         eventStore.start();
-        new Thread(dataSourcePublisher).start();
+        dataSourcePublisher.start();
         LockSupport.parkNanos(Duration.ofMillis(200).toNanos());
-        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=2", null);
+        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=2", null); // mdp-> mds
         LOGGER.atDebug().addArgument(requestURI).log("subscribing to endpoint: {}");
-        dataSourcePublisher.subscribe(requestURI, TestObject.class);
+        dataSourcePublisher.subscribe(requestURI, TestObject.class); // variant with queryContextObject -> callback handler: cmw(dataReceived, excReceived, with domain objects), mdp-like(single lambda, domain objects + access to raw data + exception or update)
+        // raw object: dataSourcePublisher.getEventStore()
 
         for (int i = 1; i < 5; i++) {
             worker.notify(new TestContext("FAIR.SELECTOR.C=2:P=" + i), new TestObject("update", i));
@@ -110,11 +111,11 @@ class OpenCmwDataSourceTest {
         final EventStore eventStore = EventStore.getFactory().setFilterConfig(TimingCtx.class, EvtTypeFilter.class).build();
         final DataSourcePublisher dataSourcePublisher = new DataSourcePublisher(null, eventStore);
         eventStore.start();
-        new Thread(dataSourcePublisher).start();
+        dataSourcePublisher.start();
         LockSupport.parkNanos(Duration.ofMillis(200).toNanos());
-        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=3&mimeType=application/octet-stream", null);
+        final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=3&contentType=application/octet-stream", null);
         LOGGER.atDebug().addArgument(requestURI).log("requesting GET from endpoint: {}");
-        final Future<TestObject> future = dataSourcePublisher.get(requestURI , TestObject.class);
+        final Future<TestObject> future = dataSourcePublisher.get(requestURI , TestObject.class); // uri_without_query oder serviceName + resolver, requestContext, type
         final TestObject result = future.get(1000, TimeUnit.MILLISECONDS);
         assertEquals(referenceObject, result);
 
@@ -153,7 +154,7 @@ class OpenCmwDataSourceTest {
         final EventStore eventStore = EventStore.getFactory().setFilterConfig(TimingCtx.class, EvtTypeFilter.class).build();
         final DataSourcePublisher dataSourcePublisher = new DataSourcePublisher(null, eventStore);
         eventStore.start();
-        new Thread(dataSourcePublisher).start();
+        dataSourcePublisher.start();
         LockSupport.parkNanos(Duration.ofMillis(200).toNanos());
         final URI requestURI = new URI("mdp", "localhost:" + brokerPort, "/testWorker", "ctx=FAIR.SELECTOR.C=3", null);
         LOGGER.atDebug().addArgument(requestURI).log("requesting GET from endpoint: {}");
