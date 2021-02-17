@@ -181,6 +181,7 @@ class MajordomoRestPluginTests {
         Request request = new Request.Builder().url("http://localhost:8080/" + ImageService.PROPERTY_NAME).build();
         EventSourceListener eventSourceListener = new EventSourceListener() {
             private final BlockingQueue<Object> events = new LinkedBlockingDeque<>();
+
             @Override
             public void onEvent(final @NotNull EventSource eventSource, final String id, final String type, @NotNull String data) {
                 eventCounter.getAndIncrement();

@@ -10,6 +10,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.*;
 
+import static io.opencmw.OpenCmwProtocol.Command.SET_REQUEST;
 import static io.opencmw.OpenCmwProtocol.MdpMessage;
 
 import java.io.IOException;
@@ -126,7 +127,7 @@ class MajordomoWorkerTests {
         serialiser.serialiseObject(inputData);
         byte[] input = Arrays.copyOf(ioBuffer.elements(), ioBuffer.position());
         {
-            final MdpMessage reply = clientSession.send(requestTopic, input); // w/o RBAC
+            final MdpMessage reply = clientSession.send(SET_REQUEST, requestTopic, input); // w/o RBAC
             if (!reply.errors.isBlank()) {
                 LOGGER.atError().addArgument(reply).log("reply with exceptions:\n{}");
             }
@@ -204,7 +205,7 @@ class MajordomoWorkerTests {
         ioBuffer.flip();
         byte[] requestData = Arrays.copyOf(ioBuffer.elements(), ioBuffer.limit());
         final String mimeType = contentType.isBlank() ? "" : ("?contentType=" + contentType) + ("HTML".equals(contentType) ? "&noMenu" : "");
-        final OpenCmwProtocol.MdpMessage rawReply = clientSession.send(TEST_SERVICE_NAME + mimeType, requestData);
+        final OpenCmwProtocol.MdpMessage rawReply = clientSession.send(SET_REQUEST, TEST_SERVICE_NAME + mimeType, requestData);
         assertNotNull(rawReply, "rawReply not being null");
         assertEquals("", rawReply.errors, "no exception thrown");
         assertNotNull(rawReply.data, "user-data not being null");

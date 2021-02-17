@@ -14,7 +14,7 @@ import io.opencmw.serialiser.annotations.MetaInfo;
 @MetaInfo(description = "domain object definition for receiving/sending generic binary data")
 public class BinaryData {
     public String resourceName = "default";
-    public MimeType contentType = MimeType.BINARY;
+    public MimeType contentType = MimeType.UNKNOWN;
     public byte[] data = {};
     public int dataSize = -1;
 

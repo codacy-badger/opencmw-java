@@ -186,15 +186,18 @@ public class MajordomoWorker<C, I, O> extends BasicMdpWorker {
         this.htmlHandler = htmlHandler;
     }
 
-    public void notify(final C replyCtx, final O reply) {
+    public void notify(final @NotNull C replyCtx, final @NotNull O reply) {
+        notify(serviceName, replyCtx, reply);
+    }
+
+    public void notify(final @NotNull String path, final @NotNull C replyCtx, final @NotNull O reply) {
         defaultNotifyBuffer.reset();
         notifySerialiser.serialiseObject(reply);
         defaultNotifyBuffer.flip();
         final byte[] data = Arrays.copyOf(defaultNotifyBuffer.elements(), defaultNotifyBuffer.limit());
-        URI topic = URI.create(serviceName + '?' + QueryParameterParser.generateQueryParameter(replyCtx));
-        MdpMessage notifyMessage = new MdpMessage(null, PROT_WORKER, W_NOTIFY, serviceBytes, EMPTY_FRAME, topic, data, "", RBAC);
-
-        super.notify(notifyMessage);
+        final String query = QueryParameterParser.generateQueryParameter(replyCtx);
+        URI topic = URI.create(serviceName + path + (query.isBlank() ? "" : ('?' + query)));
+        super.notify(new MdpMessage(null, PROT_WORKER, W_NOTIFY, serviceBytes, EMPTY_FRAME, topic, data, "", RBAC));
     }
 
     public interface Handler<C, I, O> {

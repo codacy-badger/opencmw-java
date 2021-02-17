@@ -22,6 +22,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
 import org.jetbrains.annotations.NotNull;
@@ -95,8 +96,9 @@ public class MajordomoBroker extends Thread {
     /* default */ final Map<String, Service> services = new HashMap<>(); // known services Map<'service name', Service>
     protected final Map<String, Worker> workers = new HashMap<>(); // known workers Map<addressHex, Worker
     protected final Map<String, Client> clients = new HashMap<>();
-    protected final Map<String, AtomicInteger> activeSubscriptions = new HashMap<>(); // Map<ServiceName,List<SubscriptionTopic>>
-    protected final Map<String, List<byte[]>> routerBasedSubscriptions = new HashMap<>(); // Map<ServiceName,List<SubscriptionTopic>>
+    protected static BiPredicate<URI, URI> subscriptionMatcher = new PathSubscriptionMatcher(); // <notify topic, subscribe topic>
+    protected final Map<URI, AtomicInteger> activeSubscriptions = new HashMap<>(); // Map<ServiceName,List<SubscriptionTopic>>
+    protected final Map<URI, List<byte[]>> routerBasedSubscriptions = new HashMap<>(); // Map<ServiceName,List<SubscriptionTopic>>
     private final AtomicBoolean run = new AtomicBoolean(false); // NOPMD - nomen est omen
     private final Deque<Worker> waiting = new ArrayDeque<>(); // idle workers
     /* default */ final Map<String, DnsServiceItem> dnsCache = new HashMap<>(); // <server name, DnsServiceItem>
@@ -269,18 +271,18 @@ public class MajordomoBroker extends Thread {
             return false;
         }
         final Command subType = topicBytes[0] == 1 ? SUBSCRIBE : (topicBytes[0] == 0 ? UNSUBSCRIBE : UNKNOWN); // '1'('0' being the default ZeroMQ (un-)subscribe command
-        final String subscriptionTopic = new String(topicBytes, 1, topicBytes.length - 1, UTF_8);
+        final URI subscriptionTopic = URI.create(new String(topicBytes, 1, topicBytes.length - 1, UTF_8));
         LOGGER.atDebug().addArgument(subType).addArgument(subscriptionTopic).log("received subscription request: {} to '{}'");
 
         switch (subType) {
         case SUBSCRIBE:
             if (activeSubscriptions.computeIfAbsent(subscriptionTopic, s -> new AtomicInteger()).incrementAndGet() == 1) {
-                subSocket.subscribe(subscriptionTopic);
+                subSocket.subscribe(subscriptionTopic.toString());
             }
             return true;
         case UNSUBSCRIBE:
             if (activeSubscriptions.computeIfAbsent(subscriptionTopic, s -> new AtomicInteger()).decrementAndGet() <= 0) {
-                subSocket.unsubscribe(subscriptionTopic);
+                subSocket.unsubscribe(subscriptionTopic.toString());
             }
             return true;
         case UNKNOWN:
@@ -386,18 +388,18 @@ public class MajordomoBroker extends Thread {
                 }
                 return true;
             case SUBSCRIBE:
-                if (activeSubscriptions.computeIfAbsent(topic, s -> new AtomicInteger()).incrementAndGet() == 1) {
+                if (activeSubscriptions.computeIfAbsent(msg.topic, s -> new AtomicInteger()).incrementAndGet() == 1) {
                     subSocket.subscribe(topic);
                 }
-                routerBasedSubscriptions.computeIfAbsent(topic, s -> new ArrayList<>()).add(msg.senderID);
+                routerBasedSubscriptions.computeIfAbsent(msg.topic, s -> new ArrayList<>()).add(msg.senderID);
                 return true;
             case UNSUBSCRIBE:
-                if (activeSubscriptions.computeIfAbsent(topic, s -> new AtomicInteger()).decrementAndGet() <= 0) {
+                if (activeSubscriptions.computeIfAbsent(msg.topic, s -> new AtomicInteger()).decrementAndGet() <= 0) {
                     subSocket.unsubscribe(topic);
                 }
-                routerBasedSubscriptions.computeIfAbsent(topic, s -> new ArrayList<>()).remove(msg.senderID);
-                if (routerBasedSubscriptions.get(topic).isEmpty()) {
-                    routerBasedSubscriptions.remove(topic);
+                routerBasedSubscriptions.computeIfAbsent(msg.topic, s -> new ArrayList<>()).remove(msg.senderID);
+                if (Objects.requireNonNullElse(routerBasedSubscriptions.get(msg.topic), "").toString().isEmpty()) {
+                    routerBasedSubscriptions.remove(msg.topic);
                 }
                 return true;
             case W_HEARTBEAT:
@@ -548,20 +550,14 @@ public class MajordomoBroker extends Thread {
     }
 
     private void dispatchMessageToMatchingSubscriber(final MdpMessage msg) {
-        // final String queryString = msg.topic.getQuery()
-        // final String replyService = msg.topic.getPath() + (queryString == null || queryString.isBlank() ? "" : ("?" + queryString))
-        // N.B. for the time being only the path is matched - TODO: upgrade to full topic matching
-        for (String specificTopic : activeSubscriptions.keySet()) {
-            URI subTopic = URI.create(specificTopic);
-            if (!subTopic.getPath().startsWith(msg.topic.getPath())) {
-                continue;
-            }
-            pubSocket.sendMore(specificTopic);
+        activeSubscriptions.keySet().stream().filter(s -> subscriptionMatcher.test(msg.topic, s)).forEach(s -> {
+            // sends notification with the topic that is expected by the client for its subscription
+            pubSocket.sendMore(s.toString());
             msg.send(pubSocket);
-        }
+        });
 
         // publish also via router socket directly to known and previously subscribed clients
-        final List<byte[]> tClients = routerBasedSubscriptions.get(msg.topic.toString());
+        final List<byte[]> tClients = routerBasedSubscriptions.get(msg.topic);
         if (tClients == null) {
             return;
         }
@@ -684,7 +680,7 @@ public class MajordomoBroker extends Thread {
     protected void sendHeartbeats() {
         // Send heartbeats to idle workers if it's time
         if (System.currentTimeMillis() >= heartbeatAt) {
-            final MdpMessage heartbeatMsg = new MdpMessage(null, PROT_WORKER, W_HEARTBEAT, null, EMPTY_FRAME, EMPTY_URI, EMPTY_FRAME, "", RBAC);
+            final MdpMessage heartbeatMsg = new MdpMessage(null, PROT_WORKER, W_HEARTBEAT, EMPTY_FRAME, EMPTY_FRAME, EMPTY_URI, EMPTY_FRAME, "", RBAC);
             for (Worker worker : waiting) {
                 heartbeatMsg.senderID = worker.address;
                 heartbeatMsg.serviceNameBytes = worker.service.nameBytes;

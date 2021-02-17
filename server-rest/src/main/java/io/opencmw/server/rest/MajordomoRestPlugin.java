@@ -6,10 +6,7 @@ import static io.javalin.apibuilder.ApiBuilder.get;
 import static io.javalin.apibuilder.ApiBuilder.post;
 import static io.javalin.plugin.openapi.dsl.DocumentedContentKt.anyOf;
 import static io.javalin.plugin.openapi.dsl.DocumentedContentKt.documentedContent;
-import static io.opencmw.OpenCmwProtocol.Command.GET_REQUEST;
-import static io.opencmw.OpenCmwProtocol.Command.READY;
-import static io.opencmw.OpenCmwProtocol.Command.SET_REQUEST;
-import static io.opencmw.OpenCmwProtocol.Command.UNKNOWN;
+import static io.opencmw.OpenCmwProtocol.Command.*;
 import static io.opencmw.OpenCmwProtocol.EMPTY_FRAME;
 import static io.opencmw.OpenCmwProtocol.MdpMessage;
 import static io.opencmw.OpenCmwProtocol.MdpMessage.receive;
@@ -25,7 +22,14 @@ import static io.opencmw.server.rest.util.CombinedHandler.SseState.DISCONNECTED;
 import java.lang.reflect.ParameterizedType;
 import java.net.ProtocolException;
 import java.net.URI;
-import java.util.*;
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
@@ -34,10 +38,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
-import javax.validation.constraints.NotNull;
-
 import org.apache.commons.lang3.StringUtils;
 import org.eclipse.jetty.util.BlockingArrayQueue;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.zeromq.SocketType;
@@ -139,8 +142,7 @@ public class MajordomoRestPlugin extends BasicMdpWorker {
     }
 
     @Override
-    public boolean notify(@NotNull final MdpMessage notifyMessage) {
-        assert notifyMessage != null : "notify message must not be null";
+    public boolean notify(final @NotNull MdpMessage notifyMessage) {
         notifyRaw(notifyMessage);
         return false;
     }
@@ -288,8 +290,8 @@ public class MajordomoRestPlugin extends BasicMdpWorker {
     protected void reconnectToBroker() {
         super.reconnectToBroker();
         final byte[] classNameByte = this.getClass().getName().getBytes(UTF_8); // used for OpenAPI purposes
-        new MdpMessage(null, PROT_WORKER, READY, serviceBytes, EMPTY_FRAME, RestServer.getPublicURI(), classNameByte, "", RBAC).send(workerSocket);
-        new MdpMessage(null, PROT_WORKER, READY, serviceBytes, EMPTY_FRAME, RestServer.getLocalURI(), classNameByte, "", RBAC).send(workerSocket);
+        new MdpMessage(null, PROT_WORKER, READY, serviceBytes, EMPTY_FRAME, Objects.requireNonNull(RestServer.getPublicURI()), classNameByte, "", RBAC).send(workerSocket);
+        new MdpMessage(null, PROT_WORKER, READY, serviceBytes, EMPTY_FRAME, Objects.requireNonNull(RestServer.getLocalURI()), classNameByte, "", RBAC).send(workerSocket);
     }
 
     protected void registerEndPoint(final String endpoint) {

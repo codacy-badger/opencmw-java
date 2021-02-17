@@ -6,8 +6,7 @@ import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.*;
 
-import static io.opencmw.OpenCmwProtocol.Command.FINAL;
-import static io.opencmw.OpenCmwProtocol.Command.GET_REQUEST;
+import static io.opencmw.OpenCmwProtocol.Command.*;
 import static io.opencmw.OpenCmwProtocol.MdpMessage;
 import static io.opencmw.OpenCmwProtocol.MdpSubProtocol;
 import static io.opencmw.OpenCmwProtocol.MdpSubProtocol.PROT_CLIENT;
@@ -146,7 +145,7 @@ class MajordomoBrokerTests {
 
         {
             final String serviceName = "mmi.echo";
-            final MdpMessage replyWithoutRbac = clientSession.send(serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertArrayEquals(DEFAULT_REQUEST_MESSAGE_BYTES, replyWithoutRbac.data, "equal data");
@@ -154,7 +153,7 @@ class MajordomoBrokerTests {
 
         {
             final String serviceName = "inproc.echo";
-            final MdpMessage replyWithoutRbac = clientSession.send(serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertArrayEquals(DEFAULT_REQUEST_MESSAGE_BYTES, replyWithoutRbac.data, "equal data");
@@ -162,7 +161,7 @@ class MajordomoBrokerTests {
 
         {
             final String serviceName = "ext.echo";
-            final MdpMessage replyWithoutRbac = clientSession.send(serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertArrayEquals(DEFAULT_REQUEST_MESSAGE_BYTES, replyWithoutRbac.data, "equal data");
@@ -170,7 +169,7 @@ class MajordomoBrokerTests {
 
         {
             final String serviceName = "inproc.exception";
-            final MdpMessage replyWithoutRbac = clientSession.send(serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, serviceName, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertNotNull(replyWithoutRbac.errors, "user-data not being null");
@@ -181,7 +180,7 @@ class MajordomoBrokerTests {
 
         {
             final String serviceName = "mmi.echo";
-            final MdpMessage replyWithRbac = clientSession.send(serviceName, DEFAULT_REQUEST_MESSAGE_BYTES, DEFAULT_RBAC_TOKEN); // with RBAC
+            final MdpMessage replyWithRbac = clientSession.send(SET_REQUEST, serviceName, DEFAULT_REQUEST_MESSAGE_BYTES, DEFAULT_RBAC_TOKEN); // with RBAC
             assertNotNull(replyWithRbac, "reply message with RBAC token not being null");
             assertNotNull(replyWithRbac.data, "user-data not being null");
             assertArrayEquals(DEFAULT_REQUEST_MESSAGE_BYTES, replyWithRbac.data, "equal data");
@@ -207,21 +206,21 @@ class MajordomoBrokerTests {
         MajordomoTestClientSync clientSession = new MajordomoTestClientSync("tcp://localhost:" + openPort, "customClientName");
 
         {
-            final MdpMessage replyWithoutRbac = clientSession.send("mmi.echo", DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, "mmi.echo", DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertArrayEquals(DEFAULT_REQUEST_MESSAGE_BYTES, replyWithoutRbac.data, "MMI echo service request");
         }
 
         {
-            final MdpMessage replyWithoutRbac = clientSession.send(DEFAULT_MMI_SERVICE, DEFAULT_MMI_SERVICE.getBytes(UTF_8)); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, DEFAULT_MMI_SERVICE, DEFAULT_MMI_SERVICE.getBytes(UTF_8)); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertEquals("200", new String(replyWithoutRbac.data, UTF_8), "known MMI service request");
         }
 
         {
-            final MdpMessage replyWithoutRbac = clientSession.send(DEFAULT_MMI_SERVICE, DEFAULT_ECHO_SERVICE.getBytes(UTF_8)); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, DEFAULT_MMI_SERVICE, DEFAULT_ECHO_SERVICE.getBytes(UTF_8)); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertEquals("200", new String(replyWithoutRbac.data, UTF_8), "known MMI service request");
@@ -229,7 +228,7 @@ class MajordomoBrokerTests {
 
         {
             // MMI service request: service should not exist
-            final MdpMessage replyWithoutRbac = clientSession.send(DEFAULT_MMI_SERVICE, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, DEFAULT_MMI_SERVICE, DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertEquals("400", new String(replyWithoutRbac.data, UTF_8), "known MMI service request");
@@ -237,7 +236,7 @@ class MajordomoBrokerTests {
 
         {
             // unknown service name
-            final MdpMessage replyWithoutRbac = clientSession.send("unknownService", DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
+            final MdpMessage replyWithoutRbac = clientSession.send(SET_REQUEST, "unknownService", DEFAULT_REQUEST_MESSAGE_BYTES); // w/o RBAC
             assertNotNull(replyWithoutRbac, "reply message w/o RBAC token not being null");
             assertNotNull(replyWithoutRbac.data, "user-data not being null");
             assertEquals("501", new String(replyWithoutRbac.data, UTF_8), "unknown MMI service request");
